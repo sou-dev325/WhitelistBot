@@ -1,7 +1,7 @@
 const { Client, GatewayIntentBits } = require('discord.js');
 
 const CONFIG = {
-    TOKEN: '',
+    TOKEN: 'ここにTOKEN入れて',
     REQUEST_CHANNEL_ID: '1459630513508581492',
     CONSOLE_CHANNEL_ID: '1467076911057604638',
     NOTIFICATION_CHANNEL_ID: '1459862335312105533',
@@ -16,102 +16,107 @@ const client = new Client({
 });
 
 client.once('ready', () => {
-    console.log('bot起動');
+    console.log('--- bot起動 ---');
 });
 
-client.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
-    if (message.channel.id !== CONFIG.REQUEST_CHANNEL_ID) return;
+// メイン
+client.on('messageCreate', async (msg) => {
+    if (msg.author.bot) return;
+    if (msg.channel.id !== CONFIG.REQUEST_CHANNEL_ID) return;
 
-    const text = message.content;
+    const txt = msg.content;
 
-    const idMatch = text.match(/(?:ユーザー名|ID)[:：]\s*([a-zA-Z0-9_.-]+)/i);
-    const mentionMatch = text.match(/メンション[:：]?(希望|要望|不要)/i);
+    // なんとなく解析
+    const idMatch = txt.match(/(?:ユーザー名|ID)[:：]\s*([a-zA-Z0-9_.-]+)/i);
+    const mentionMatch = txt.match(/メンション[:：]?(希望|要望|不要)/i);
+    const isBedrock = /統合|bedrock/i.test(txt);
 
     if (!idMatch || !mentionMatch) {
         let miss = [];
         if (!idMatch) miss.push('ID');
         if (!mentionMatch) miss.push('メンション');
-        await sendError(message, `足りない: ${miss.join(', ')}`);
-        return;
+        return sendError(msg, `足りない: ${miss.join(', ')}`);
     }
 
     const mcId = idMatch[1];
-    const mention = /希望|要望/.test(mentionMatch[1]);
+    const wantMention = /希望|要望/.test(mentionMatch[1]);
 
-    let consoleChannel;
+    let consoleCh;
     try {
-        consoleChannel = await client.channels.fetch(CONFIG.CONSOLE_CHANNEL_ID);
+        consoleCh = await client.channels.fetch(CONFIG.CONSOLE_CHANNEL_ID);
     } catch {
         return;
     }
 
-    const cmds = [
-        `fwhitelist add ${mcId}`,
-        `fwhitelist add .${mcId}`,
-        `whitelist add .${mcId}`,
-        `whitelist add ${mcId}`,
-    ];
+    // BedrockかJavaかで切り替え
+    let cmds;
+    if (isBedrock) {
+        console.log('bedrockっぽい');
+        cmds = [
+            `fwhitelist add .${mcId}`,
+            `whitelist add .${mcId}`,
+        ];
+    } else {
+        console.log('javaっぽい');
+        cmds = [
+            `fwhitelist add ${mcId}`,
+            `whitelist add ${mcId}`,
+        ];
+    }
 
     let ok = false;
 
     for (const cmd of cmds) {
         try {
-            console.log('send:', cmd);
-            await consoleChannel.send(cmd);
+            console.log('send ->', cmd);
+            await consoleCh.send(cmd);
 
-            const logs = await consoleChannel.awaitMessages({
+            const logs = await consoleCh.awaitMessages({
                 filter: m => m.channel.id === CONFIG.CONSOLE_CHANNEL_ID,
                 max: 5,
                 time: 5000,
             });
 
-            const hit = logs.some(m => {
+            ok = logs.some(m => {
                 const c = m.content.toLowerCase();
                 return (
                     c.includes(mcId.toLowerCase()) &&
-                    (
-                        c.includes('ホワイトリスト') ||
-                        (c.includes('added') && c.includes('whitelist'))
-                    )
+                    (c.includes('ホワイトリスト') || (c.includes('added') && c.includes('whitelist')))
                 );
             });
 
-            if (hit) {
-                ok = true;
-                break;
-            }
-        } catch {
-            // 何もしない
+            if (ok) break;
+            console.log('ダメっぽい、次');
+
+        } catch (e) {
+            console.log('なんかエラー', e);
         }
     }
 
     if (ok) {
-        await message.react('✅').catch(() => {});
+        await msg.react('✅').catch(() => {});
 
-        if (mention) {
+        if (wantMention) {
             try {
-                const notif = await client.channels.fetch(CONFIG.NOTIFICATION_CHANNEL_ID);
-                await notif.send(
-                    `<@${message.author.id}> 登録された\n` +
-                    `\`${mcId}\` OK`
-                );
+                const n = await client.channels.fetch(CONFIG.NOTIFICATION_CHANNEL_ID);
+                await n.send(`<@${msg.author.id}> 登録できた\n\`${mcId}\``);
             } catch {}
         }
     } else {
-        await sendError(message, '通らなかった');
+        sendError(msg, '通らなかった');
     }
 });
 
-async function sendError(message, reason) {
+// 失敗用
+async function sendError(msg, reason) {
     try {
-        const notif = await client.channels.fetch(CONFIG.NOTIFICATION_CHANNEL_ID);
-        await notif.send(
-            `<@${message.author.id}> ダメだった\n` +
+        const n = await client.channels.fetch(CONFIG.NOTIFICATION_CHANNEL_ID);
+        await n.send(
+            `<@${msg.author.id}> 失敗\n` +
             `理由: ${reason}\n` +
-            message.url
+            msg.url
         );
-        await message.react('❌').catch(() => {});
+        await msg.react('❌').catch(() => {});
     } catch {}
 }
 
